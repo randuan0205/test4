@@ -1,0 +1,102 @@
+---
+title: "ML.project.Writeup"
+author: "Ran Duan"
+date: "Sunday, May 03, 2015"
+output: html_document
+---
+#Read in the data
+
+```{r}
+library(caret)
+library(parallel)
+library(doParallel)
+library(rpart)
+library(tree)
+rawdata<-read.csv("pml-training.csv",header=T)
+finaltestdata<-read.csv("pml-testing.csv",header=T)
+dim(rawdata)
+dim(finaltestdata)
+```
+
+#pick up predictors
+   ##exclude variables with missing values and keep major predictors (belt,arm,dumbbell,forearm)
+
+```{r}
+Missingdata <- sapply(rawdata, function (x) any(is.na(x) | x == ""))  
+potentialpredictor<-!Missingdata & grepl("belt|[^(fore)]arm|dumbbell|forearm", names(Missingdata))
+predictorlist <- names(Missingdata)[potentialpredictor]
+filterdata<-rawdata[,c("classe", predictorlist)]
+dim(filterdata)
+finaltest<-finaltestdata[,predictorlist]
+dim(finaltest)
+```
+
+# data preprocess 1 - split training and testing set
+   ##split the training data into 60% training and 40% testing, which is purposed for out-of-sample error estimate
+
+```{r}
+set.seed (123)
+intrain<-createDataPartition(filterdata$classe,p=0.6,list=FALSE)
+datatraining<-filterdata[intrain,]
+datatesting<-filterdata[-intrain,]
+```
+
+# data preprocess 2 - standardization (center&scaling)
+```{r}
+preobj<-preProcess(datatraining[,-1],method=c("center","scale"))
+datatrainingS<-predict(preobj,datatraining[,-1])
+datatrainingS<-data.frame(datatraining$classe,datatrainingS)
+datatestingS<-predict(preobj,datatesting[,-1])
+datatestingS<-data.frame(datatesting$classe,datatestingS)
+finaltestS<-predict(preobj,finaltest)
+```
+# model training_1 - random forrest - model fit (allowing parallel to accelerate model building)
+  ##model used 35 reps bootstrapp and tried 27 variables for each split decision
+  ##Boostraping results shows OOB error rate is only 0.87%
+```{r}
+c1 <- makeCluster(detectCores() - 1)
+registerDoParallel(c1)
+ctrl <- trainControl(classProbs=TRUE,
+                     savePredictions=TRUE,
+                     allowParallel=TRUE)
+system.time(rffit <- train(datatraining.classe ~ ., data=datatrainingS, method="rf"))
+stopCluster(c1)
+rffit
+trainpred <- predict(rffit, datatrainingS)
+confusionMatrix(trainpred, datatrainingS[, "datatraining.classe"])
+```
+# model training_2 - decison tree 
+##(results show 33.9% out of sample error rate)
+```{r}
+dtfit<-tree(datatraining.classe ~ .,datatrainingS)
+dtfitcv<-cv.tree(dtfit,FUN=prune.misclass)
+dtfitcv
+OOS_error<-(3993/11776)
+OOS_error
+##Visulatioin of dicision tree
+dtfitprune<-prune.misclass(dtfit,best=17)
+summary(dtfitprune)
+plot(dtfitprune)
+text(dtfitprune,pretty=0)
+```
+
+**Random forrest has the lower estimated out-of-sample error rate based on resampling methdology. So it will be applied to the test data set**
+
+# Apply random forests to 40% test data set to validate out-of-sample error rate
+#random forests achieved 99% accuracy rate on the testing data set, 
+```{r}
+testpred <- predict(rffit, datatestingS)
+confusionMatrix(testpred, datatestingS[, "datatesting.classe"])
+```
+
+#final random forrest model
+```{r}
+rffit$finalModel
+varImp(rffit)
+```
+
+#Apply to assigned test data
+```{r}
+finaltestpred <- predict(rffit, finaltestS)
+finaltestpred
+```
